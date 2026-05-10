@@ -36,6 +36,72 @@ EMAIL_RECIPIENT = os.environ["EMAIL_RECIPIENT"]
 NEWSAPI_URL = "https://newsapi.org/v2/everything"
 MODEL = "claude-opus-4-6"
 
+# Ticker -> (full company name, brief description of what they do).
+# Used for both the watchlist and the wider movers universe.
+TICKER_INFO: dict[str, tuple[str, str]] = {
+    # --- Watchlist (20) ---
+    "NVDA":  ("NVIDIA",                    "AI chips & GPUs — the industry standard"),
+    "MSFT":  ("Microsoft",                 "Azure cloud, OpenAI partnership, Copilot"),
+    "GOOGL": ("Alphabet (Google)",         "Search, Gemini AI, Google Cloud"),
+    "META":  ("Meta Platforms",            "Facebook/Instagram, Llama open-source AI"),
+    "AMZN":  ("Amazon",                    "AWS cloud — major AI hosting platform"),
+    "TSM":   ("Taiwan Semiconductor",      "Manufactures most of the world's AI chips"),
+    "AVGO":  ("Broadcom",                  "Networking chips & custom AI accelerators"),
+    "AMD":   ("Advanced Micro Devices",    "GPU/CPU rival to NVIDIA"),
+    "ASML":  ("ASML Holding",              "Only maker of EUV chip-making machines"),
+    "ARM":   ("Arm Holdings",              "Chip architecture for phones & AI devices"),
+    "MU":    ("Micron Technology",         "Memory chips (DRAM, HBM for AI)"),
+    "SMCI":  ("Super Micro Computer",      "AI server hardware"),
+    "VRT":   ("Vertiv",                    "Data center cooling & power infrastructure"),
+    "ANET":  ("Arista Networks",           "High-speed networking for data centers"),
+    "DELL":  ("Dell Technologies",         "AI server systems"),
+    "ORCL":  ("Oracle",                    "Enterprise software, Oracle Cloud, AI infra"),
+    "PLTR":  ("Palantir Technologies",     "Government & enterprise AI data platforms"),
+    "CRM":   ("Salesforce",                "CRM software with built-in AI"),
+    "NOW":   ("ServiceNow",                "Enterprise workflow automation & AI agents"),
+    "SNOW":  ("Snowflake",                 "Data warehouse for AI & analytics"),
+    # --- Extended universe (movers scan) ---
+    "AAPL":  ("Apple",                     "iPhones, on-device Apple Intelligence AI"),
+    "TSLA":  ("Tesla",                     "EVs & autonomous driving AI"),
+    "IBM":   ("IBM",                       "Enterprise AI (Watson, Granite), hybrid cloud"),
+    "INTC":  ("Intel",                     "CPUs & chip foundry"),
+    "QCOM":  ("Qualcomm",                  "Mobile chip leader (Snapdragon AI)"),
+    "TXN":   ("Texas Instruments",         "Analog & embedded chips"),
+    "NXPI":  ("NXP Semiconductors",        "Automotive & IoT chips"),
+    "MRVL":  ("Marvell Technology",        "Data center & AI networking chips"),
+    "ON":    ("ON Semiconductor",          "Power & sensor chips for autos & AI"),
+    "LRCX":  ("Lam Research",              "Chip-making equipment"),
+    "KLAC":  ("KLA Corp",                  "Chip inspection equipment"),
+    "AMAT":  ("Applied Materials",         "Chip manufacturing equipment"),
+    "ADI":   ("Analog Devices",            "High-performance analog chips"),
+    "MCHP":  ("Microchip Technology",      "Embedded microcontrollers"),
+    "SWKS":  ("Skyworks Solutions",        "Wireless/RF chips"),
+    "GFS":   ("GlobalFoundries",           "Chip foundry"),
+    "CSCO":  ("Cisco Systems",             "Networking gear & AI security"),
+    "NTAP":  ("NetApp",                    "Enterprise data storage"),
+    "PSTG":  ("Pure Storage",              "Flash storage for AI workloads"),
+    "HPE":   ("Hewlett Packard Enterprise", "Servers & supercomputing"),
+    "MDB":   ("MongoDB",                   "NoSQL database for AI apps"),
+    "DDOG":  ("Datadog",                   "Cloud monitoring & observability"),
+    "NET":   ("Cloudflare",                "CDN, edge compute, AI inference at edge"),
+    "ESTC":  ("Elastic",                   "Search & observability platform"),
+    "AI":    ("C3.ai",                     "Enterprise AI software"),
+    "PATH":  ("UiPath",                    "Workflow automation & RPA"),
+    "BBAI":  ("BigBear.ai",                "AI for defense & intelligence"),
+    "SOUN":  ("SoundHound AI",             "Voice AI technology"),
+    "IONQ":  ("IonQ",                      "Quantum computing"),
+    "QBTS":  ("D-Wave Quantum",            "Quantum computing"),
+    "RGTI":  ("Rigetti Computing",         "Quantum computing"),
+    "NBIS":  ("Nebius Group",              "AI cloud infrastructure"),
+    "COHR":  ("Coherent Corp",             "Photonics for data center networking"),
+    "SNPS":  ("Synopsys",                  "Chip design software (acquired Ansys)"),
+    "SYM":   ("Symbotic",                  "AI-powered warehouse robotics"),
+    "DUOL":  ("Duolingo",                  "Language learning with AI tutors"),
+    "U":     ("Unity Software",            "Game/3D engine with AI tools"),
+    "TEM":   ("Tempus AI",                 "AI for healthcare & genomics"),
+    "RXRX":  ("Recursion Pharmaceuticals", "AI-driven drug discovery"),
+}
+
 # 20-stock watchlist — shown every day in the main table
 WATCHLIST = [
     "NVDA", "MSFT", "GOOGL", "META", "AMZN",
@@ -44,15 +110,16 @@ WATCHLIST = [
     "ORCL", "PLTR", "CRM", "NOW", "SNOW",
 ]
 
-# ~40 additional tickers — pooled with the watchlist for the "Top Movers" scan
+# Additional tickers — pooled with the watchlist for the "Top Movers" scan.
+# JNPR removed (acquired & delisted), ANSS replaced with SNPS (Synopsys, who bought it).
 EXTRA_UNIVERSE = [
     "AAPL", "TSLA", "IBM", "INTC", "QCOM", "TXN", "NXPI", "MRVL", "ON",
     "LRCX", "KLAC", "AMAT", "ADI", "MCHP", "SWKS", "GFS",
-    "CSCO", "JNPR", "NTAP", "PSTG", "HPE",
+    "CSCO", "NTAP", "PSTG", "HPE",
     "MDB", "DDOG", "NET", "ESTC",
     "AI", "PATH", "BBAI", "SOUN",
     "IONQ", "QBTS", "RGTI", "NBIS",
-    "COHR", "ANSS", "SYM", "DUOL", "U",
+    "COHR", "SNPS", "SYM", "DUOL", "U",
     "TEM", "RXRX",
 ]
 
@@ -276,17 +343,31 @@ def _stock_row(item: dict) -> str:
     color = "#4ade80" if is_up else "#f87171"
     arrow = "▲" if is_up else "▼"
     sign = "+" if is_up else ""
+    ticker = item["ticker"]
+    name, desc = TICKER_INFO.get(ticker, (ticker, ""))
+
+    descriptor_html = (
+        f'<div style="color:#666666; font-size:11px; margin-top:2px; '
+        f'line-height:1.3;">{name} &mdash; {desc}</div>'
+        if desc else ""
+    )
+
     return f"""
         <tr>
-          <td style="padding:9px 4px; border-bottom:1px solid #1c1c1c;
-                     color:#f0f0f0; font-weight:600; font-size:13px;
-                     font-family:Menlo,Consolas,monospace;">{item["ticker"]}</td>
-          <td style="padding:9px 4px; border-bottom:1px solid #1c1c1c;
+          <td style="padding:10px 4px; border-bottom:1px solid #1c1c1c;
+                     vertical-align:top;">
+            <div style="color:#f0f0f0; font-weight:600; font-size:13px;
+                        font-family:Menlo,Consolas,monospace;">{ticker}</div>
+            {descriptor_html}
+          </td>
+          <td style="padding:10px 4px; border-bottom:1px solid #1c1c1c;
                      color:#aaaaaa; text-align:right; font-size:13px;
-                     font-family:Menlo,Consolas,monospace;">${item["price"]:,.2f}</td>
-          <td style="padding:9px 4px; border-bottom:1px solid #1c1c1c;
+                     font-family:Menlo,Consolas,monospace;
+                     vertical-align:top; white-space:nowrap;">${item["price"]:,.2f}</td>
+          <td style="padding:10px 4px; border-bottom:1px solid #1c1c1c;
                      color:{color}; text-align:right; font-size:13px;
-                     font-weight:600; font-family:Menlo,Consolas,monospace;">
+                     font-weight:600; font-family:Menlo,Consolas,monospace;
+                     vertical-align:top; white-space:nowrap;">
             {arrow} {sign}{pct:.2f}%
           </td>
         </tr>"""

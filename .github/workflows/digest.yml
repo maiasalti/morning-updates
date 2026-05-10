@@ -13,6 +13,10 @@ jobs:
     name: Fetch, Summarize & Send
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Opt into Node.js 24 early for actions/checkout@v4 and actions/setup-python@v5,
+    # which were built on Node.js 20 (deprecated June 2 2026 / removed Sept 16 2026).
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
     steps:
       - name: Checkout repository

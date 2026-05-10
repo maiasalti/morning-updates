@@ -1,19 +1,30 @@
-# AI & Cancer Research Biweekly Digest
+# Daily Stocks, AI & Biotech Digest
 
-A self-running email digest that fetches the latest AI/ML and positive cancer research news, summarizes it with Claude claude-opus-4-6, and delivers a clean HTML email to your inbox every 2 days via GitHub Actions.
+A self-running email digest that fetches AI/tech stock movements, AI & tech news, and biotech advancements, summarizes everything with Claude, and delivers a clean HTML email to your inbox **every morning at 10am Singapore time** via GitHub Actions.
 
 ---
 
 ## What it does
 
-- **Runs automatically** every 2 days (and can be triggered manually anytime)
-- **Fetches** the latest AI/ML news and positive cancer research stories from NewsAPI
-- **Summarizes** everything with Claude claude-opus-4-6 — smart, warm, human tone
+- **Runs automatically** every day at 10:00 AM SGT (02:00 UTC) — also triggerable manually
+- **Pulls stock data** for ~60 AI/tech tickers from Yahoo Finance (free, no API key)
+- **Fetches** the latest AI/tech and biotech news from NewsAPI
+- **Summarizes** with Claude — smart, warm, human tone, no hype
 - **Sends** a dark-themed HTML email via Gmail SMTP
 
 ### Email sections
-1. **AI & ML** — Top 5 stories: model releases, research breakthroughs, company moves, policy
-2. **Cancer Research** — Up to 4 genuinely positive stories only. If nothing qualifies, it says so honestly.
+
+1. **Stocks** — 20-stock watchlist with last-close prices and 24h % change, plus the top 10 biggest movers from a broader ~60-ticker AI/tech universe (by absolute % move, so big drops surface too)
+2. **AI & Tech** — Top 5 stories: model releases, chip development, data centers, AI infrastructure, policy
+3. **Biotech** — Up to 5 stories. Prioritizes AI × biotech crossover (AI-discovered drugs, AlphaFold-style breakthroughs, computational biology), fills with general biotech advancements (clinical trial wins, FDA approvals, gene editing)
+
+### Stock universe
+
+**Daily watchlist (20):**
+NVDA, MSFT, GOOGL, META, AMZN, TSM, AVGO, AMD, ASML, ARM, MU, SMCI, VRT, ANET, DELL, ORCL, PLTR, CRM, NOW, SNOW
+
+**Plus ~40 more for the movers scan:**
+AAPL, TSLA, IBM, INTC, QCOM, TXN, NXPI, MRVL, ON, LRCX, KLAC, AMAT, ADI, MCHP, SWKS, GFS, CSCO, JNPR, NTAP, PSTG, HPE, MDB, DDOG, NET, ESTC, AI, PATH, BBAI, SOUN, IONQ, QBTS, RGTI, NBIS, COHR, ANSS, SYM, DUOL, U, TEM, RXRX
 
 ---
 
@@ -26,51 +37,29 @@ A self-running email digest that fetches the latest AI/ML and positive cancer re
 2. Sign in (or create an account)
 3. Navigate to **API Keys** → **Create Key**
 4. Copy the key — it starts with `sk-ant-...`
-5. Add a small amount of credit under **Billing** (Claude claude-opus-4-6 is very cheap for this use case — expect < $0.10 per run)
+5. Add a small amount of credit under **Billing** (Claude is very cheap for this — expect < $0.10 per run)
 
 #### NewsAPI Key
 1. Go to [newsapi.org/register](https://newsapi.org/register)
 2. Sign up for a free account
 3. Your API key is shown immediately on the dashboard
-4. Copy it — free tier allows 100 requests/day, which is plenty
+4. Free tier allows 100 requests/day — plenty for daily runs
 
 #### Gmail App Password
 You cannot use your regular Gmail password. You need a Google **App Password**:
 1. Make sure [2-Step Verification is enabled](https://myaccount.google.com/security) on your Google account
 2. Go to [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
 3. Select app: **Mail** → Select device: **Other** → type "GitHub Digest" → click **Generate**
-4. Copy the 16-character password (e.g., `abcd efgh ijkl mnop` — include no spaces when you use it)
+4. Copy the 16-character password (e.g., `abcd efgh ijkl mnop` — remove spaces when you use it)
+
+> No extra key for stock data — Yahoo Finance is free via `yfinance`.
 
 ---
 
-### Step 2 — Create the GitHub repo and push
+### Step 2 — Add the 5 secrets to GitHub
 
-```bash
-# Navigate to the project folder
-cd ai-cancer-digest
-
-# Initialize git and push to a new GitHub repo
-git init
-git add .
-git commit -m "Initial commit: AI & Cancer Research digest"
-
-# Create the repo on GitHub (requires gh CLI — install at cli.github.com)
-gh repo create ai-cancer-digest --public --source=. --remote=origin --push
-
-# If you don't have gh CLI, create the repo manually at github.com/new
-# then run:
-# git remote add origin https://github.com/YOUR_USERNAME/ai-cancer-digest.git
-# git branch -M main
-# git push -u origin main
-```
-
----
-
-### Step 3 — Add the 5 secrets to GitHub
-
-1. Go to your repo on GitHub: `github.com/YOUR_USERNAME/ai-cancer-digest`
-2. Click **Settings** → **Secrets and variables** → **Actions**
-3. Click **New repository secret** for each of the following:
+1. Go to your repo on GitHub → **Settings** → **Secrets and variables** → **Actions**
+2. Click **New repository secret** for each:
 
 | Secret Name | Value |
 |---|---|
@@ -80,18 +69,18 @@ gh repo create ai-cancer-digest --public --source=. --remote=origin --push
 | `EMAIL_PASSWORD` | Your 16-character Gmail App Password (no spaces) |
 | `EMAIL_RECIPIENT` | Email address to send the digest to |
 
-> `EMAIL_SENDER` and `EMAIL_RECIPIENT` can be the same address (send to yourself).
+> `EMAIL_SENDER` and `EMAIL_RECIPIENT` can be the same (send to yourself).
 
 ---
 
-### Step 4 — Enable Actions and do a manual test run
+### Step 3 — Enable Actions and do a manual test run
 
-1. Go to your repo → click the **Actions** tab
+1. Go to your repo → **Actions** tab
 2. If prompted, click **"I understand my workflows, go ahead and enable them"**
-3. In the left sidebar, click **AI & Cancer Research Digest**
+3. In the left sidebar, click **Daily Stocks, AI & Biotech Digest**
 4. Click **Run workflow** → **Run workflow** (green button)
-5. Watch the run — it takes ~30–60 seconds
-6. Check your inbox for the email!
+5. The run takes ~30–60 seconds
+6. Check your inbox
 
 ---
 
@@ -114,11 +103,25 @@ ai-cancer-digest/
 
 | Thing to change | Where |
 |---|---|
-| Delivery time | `digest.yml` → cron schedule (`0 9 */2 * *` = 9am UTC every 2 days) |
-| Number of AI stories | `summarize_ai_news()` → change `max_tokens` or the prompt |
-| News topics / search terms | `main()` → `ai_query` and `cancer_query` strings |
+| Delivery time | `digest.yml` → cron schedule (currently `0 2 * * *` = 02:00 UTC = 10am SGT) |
+| Watchlist or universe | `digest.py` → `WATCHLIST` and `EXTRA_UNIVERSE` constants |
+| News topics / search terms | `main()` → `ai_query` and `biotech_query` strings |
+| Number of stories per section | Each `summarize_*()` function |
 | Email design | `build_html()` → all inline CSS |
 | Claude model | `MODEL` constant at the top of `digest.py` |
+
+### Changing the timezone
+
+Edit the cron line in `.github/workflows/digest.yml`. GitHub Actions cron is always in **UTC**, so:
+
+| Local 10am | Cron expression |
+|---|---|
+| Singapore (UTC+8) | `0 2 * * *` |
+| London (UTC+0) | `0 10 * * *` |
+| New York (UTC-5) | `0 15 * * *` |
+| Pacific (UTC-8) | `0 18 * * *` |
+
+For DST-aware locations, pick whichever offset matters more to you.
 
 ---
 
@@ -130,13 +133,20 @@ ai-cancer-digest/
 - Make sure 2-Step Verification is on for your Google account
 
 **NewsAPI returns 0 articles?**
-- The script automatically widens the search window from 2 days to 4 days
-- Free tier does not allow searching articles older than 1 month
+- The script auto-widens the search window from 1 day to 3 days
+- Free tier doesn't allow searching articles older than ~1 month
+
+**Stock data missing for some tickers?**
+- Yahoo Finance occasionally rate-limits. Failed tickers are logged and skipped — the rest still come through
+- Ticker symbols change occasionally (e.g., FB → META). Update `WATCHLIST` if you hit this
 
 **Claude returns invalid JSON?**
-- Rare but possible — re-run the workflow manually; it's a transient issue
+- Rare but possible — re-run the workflow manually
 - The `_clean_json()` helper strips markdown fences if Claude wraps its response
 
-**Actions workflow not running on schedule?**
+**Workflow not running on schedule?**
 - GitHub may delay scheduled workflows by up to 1 hour during high-traffic periods
 - Repos with no activity for 60 days have scheduled workflows paused — push a commit to reactivate
+
+**Weekend runs show "stale" stock data?**
+- That's expected — the email shows the last US trading day's close. The "Last close" date in the email tells you exactly which day

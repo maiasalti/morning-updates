@@ -1,6 +1,7 @@
 """
-AI & Cancer Research Biweekly Digest
-Fetches news, summarizes with Claude, sends via Gmail SMTP.
+Daily Stocks, AI & Biotech Digest
+Fetches stock movements, AI/tech news, and biotech news, summarizes with Claude,
+and sends a clean HTML email via Gmail SMTP.
 """
 
 import json
@@ -14,6 +15,7 @@ from email.mime.text import MIMEText
 
 import anthropic
 import requests
+import yfinance as yf
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,12 +36,114 @@ EMAIL_RECIPIENT = os.environ["EMAIL_RECIPIENT"]
 NEWSAPI_URL = "https://newsapi.org/v2/everything"
 MODEL = "claude-opus-4-6"
 
+# 20-stock watchlist — shown every day in the main table
+WATCHLIST = [
+    "NVDA", "MSFT", "GOOGL", "META", "AMZN",
+    "TSM", "AVGO", "AMD", "ASML", "ARM",
+    "MU", "SMCI", "VRT", "ANET", "DELL",
+    "ORCL", "PLTR", "CRM", "NOW", "SNOW",
+]
+
+# ~40 additional tickers — pooled with the watchlist for the "Top Movers" scan
+EXTRA_UNIVERSE = [
+    "AAPL", "TSLA", "IBM", "INTC", "QCOM", "TXN", "NXPI", "MRVL", "ON",
+    "LRCX", "KLAC", "AMAT", "ADI", "MCHP", "SWKS", "GFS",
+    "CSCO", "JNPR", "NTAP", "PSTG", "HPE",
+    "MDB", "DDOG", "NET", "ESTC",
+    "AI", "PATH", "BBAI", "SOUN",
+    "IONQ", "QBTS", "RGTI", "NBIS",
+    "COHR", "ANSS", "SYM", "DUOL", "U",
+    "TEM", "RXRX",
+]
+
+EXTENDED_UNIVERSE = WATCHLIST + EXTRA_UNIVERSE
+
+
+# ---------------------------------------------------------------------------
+# Stock fetching (yfinance — free, no API key)
+# ---------------------------------------------------------------------------
+
+def fetch_stock_data(tickers: list[str]) -> tuple[list[dict], str | None]:
+    """
+    Batch-fetch the last several daily candles for each ticker, then compute
+    the % change between the two most recent closes.
+
+    Returns (results, as_of_date_str). Each result has:
+        ticker, price, change_pct, change_abs
+
+    Tickers that fail (delisted, halted, no data) are silently dropped.
+    """
+    log.info("Fetching prices for %d tickers...", len(tickers))
+
+    # Batch download is ~10x faster than per-ticker requests
+    data = yf.download(
+        tickers,
+        period="5d",
+        interval="1d",
+        progress=False,
+        group_by="ticker",
+        auto_adjust=False,
+        threads=True,
+    )
+
+    results: list[dict] = []
+    as_of: str | None = None
+    multi_ticker = len(tickers) > 1
+
+    for ticker in tickers:
+        try:
+            t_data = data[ticker] if multi_ticker else data
+            closes = t_data["Close"].dropna()
+            if len(closes) < 2:
+                log.warning("Not enough data for %s — skipping.", ticker)
+                continue
+
+            prev_close = float(closes.iloc[-2])
+            last_close = float(closes.iloc[-1])
+            change_abs = last_close - prev_close
+            change_pct = (change_abs / prev_close) * 100
+
+            if as_of is None:
+                as_of = closes.index[-1].strftime("%b %d, %Y")
+
+            results.append({
+                "ticker": ticker,
+                "price": last_close,
+                "change_pct": change_pct,
+                "change_abs": change_abs,
+            })
+        except Exception as e:
+            log.warning("Failed to process %s: %s", ticker, e)
+            continue
+
+    log.info("Successfully fetched %d/%d tickers (as of %s)",
+             len(results), len(tickers), as_of)
+    return results, as_of
+
+
+def get_stock_summary() -> dict:
+    """Return watchlist data and top-10 movers from the extended universe."""
+    all_data, as_of = fetch_stock_data(EXTENDED_UNIVERSE)
+    by_ticker = {d["ticker"]: d for d in all_data}
+
+    # Preserve the order of the watchlist
+    watchlist_data = [by_ticker[t] for t in WATCHLIST if t in by_ticker]
+
+    # Top movers ranked by absolute % change (so big drops show up too)
+    movers = sorted(all_data, key=lambda d: abs(d["change_pct"]), reverse=True)[:10]
+
+    return {
+        "watchlist": watchlist_data,
+        "movers": movers,
+        "as_of": as_of or "unknown",
+    }
+
 
 # ---------------------------------------------------------------------------
 # News fetching
 # ---------------------------------------------------------------------------
 
-def fetch_articles(query: str, days_back: int = 2, page_size: int = 25) -> list[dict]:
+def fetch_articles(query: str, days_back: int = 1, page_size: int = 30) -> list[dict]:
     """Fetch articles from NewsAPI and return the raw article list."""
     from_date = (datetime.utcnow() - timedelta(days=days_back)).strftime("%Y-%m-%d")
     params = {
@@ -56,7 +160,6 @@ def fetch_articles(query: str, days_back: int = 2, page_size: int = 25) -> list[
     if data.get("status") != "ok":
         raise RuntimeError(f"NewsAPI error: {data.get('message', 'unknown error')}")
     articles = data.get("articles", [])
-    # Drop articles with missing essentials
     articles = [a for a in articles if a.get("title") and a.get("url")]
     return articles
 
@@ -69,11 +172,7 @@ def articles_to_prompt_text(articles: list[dict]) -> str:
         desc = (a.get("description") or a.get("content") or "").strip()[:400]
         url = a.get("url", "")
         source = a.get("source", {}).get("name", "Unknown")
-        lines.append(
-            f"{i}. [{source}] {title}\n"
-            f"   {desc}\n"
-            f"   URL: {url}"
-        )
+        lines.append(f"{i}. [{source}] {title}\n   {desc}\n   URL: {url}")
     return "\n\n".join(lines)
 
 
@@ -86,7 +185,6 @@ def _clean_json(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
-        # Drop the opening ``` line and the closing ``` line
         inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
         text = "\n".join(inner).strip()
     return text
@@ -94,14 +192,14 @@ def _clean_json(text: str) -> str:
 
 def summarize_ai_news(articles: list[dict]) -> list[dict]:
     """
-    Ask Claude to select and summarize the top 5 AI/ML stories.
-    Returns a list of 5 story dicts with keys: title, summary, url, source.
+    Pick and summarize the top 5 AI/tech stories. Returns a list of 5 dicts
+    with keys: title, summary, url, source.
     """
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    prompt = f"""You are the editor of a smart, widely-read AI digest. Below are raw news articles from the last 48 hours about artificial intelligence and machine learning.
+    prompt = f"""You are the editor of a smart, widely-read AI & tech digest. Below are raw news articles from the last 24 hours.
 
-Your task: Pick the 5 most significant stories — model releases, research breakthroughs, company moves, policy shifts, interesting technical papers. For each, write a short, punchy 2-3 sentence summary in a warm, human voice. Be direct. No hype, no corporate speak.
+Your task: Pick the 5 most significant stories spanning AI/ML, semiconductors and chip development, data centers, AI infrastructure, and tech policy. Mix it up — don't make all 5 about the same company or theme. For each, write a short, punchy 2-3 sentence summary in a warm, human voice. Be direct. No hype, no corporate speak.
 
 Return ONLY valid JSON — a list of exactly 5 objects. Each object must have:
   - "title": a short, punchy headline you write (NOT the original title)
@@ -126,37 +224,35 @@ Return only the JSON array. No markdown fences, no explanation, no preamble."""
     return stories[:5]
 
 
-def summarize_cancer_news(articles: list[dict]) -> dict:
+def summarize_biotech_news(articles: list[dict]) -> list[dict]:
     """
-    Ask Claude to identify genuinely positive cancer research stories.
-    Returns {"stories": [...], "editor_note": str|None}.
+    Hybrid section: prioritize AI x biotech crossover, fill with general
+    biotech advancements. Returns up to 5 dicts with keys:
+    title, summary, url, source, category.
     """
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    prompt = f"""You are the editor of a cancer research digest. Your readers are smart, hopeful people who want real progress — not spin.
+    prompt = f"""You are the editor of a biotech digest for a sharp reader interested in BOTH AI x biotech crossover AND general biotech progress.
 
-Below are raw news articles from the last 48 hours about cancer research.
+From the articles below (last 24 hours), pick up to 5 stories. Use this priority order:
+1. **AI x Biotech crossover** — AI-discovered drugs, AlphaFold-style breakthroughs, computational biology, AI in medical diagnostics, ML-driven target discovery. Aim for at least 1-2 of these if any genuinely qualify.
+2. **General biotech advancements** — clinical trial wins (with real efficacy data), FDA/EMA approvals, novel therapies, gene editing/CRISPR results, mRNA platforms, immunotherapies.
 
-Your task: Identify up to 4 stories that are GENUINELY positive or promising:
-  ✓ Include: successful clinical trials, FDA/EMA drug approvals, new therapies showing real efficacy data, meaningful survivorship milestones, early breakthroughs with actual results
-  ✗ Exclude: mortality statistics, tragic stories, "researchers hope someday..." fluff with no data, fundraising announcements, awareness campaigns
+Skip noise: awareness campaigns, fundraising announcements, vague "researchers hope someday..." pieces with no data, mortality statistics.
 
-If fewer than 4 genuinely positive stories exist, include only the real ones. If NONE qualify, return an empty list and write an honest, warm editor's note.
+Each summary 2-3 sentences, smart and grounded in actual findings. No hype.
 
-Return ONLY valid JSON — an object with exactly these keys:
-  - "stories": list of story objects (may be empty)
-  - "editor_note": if stories is empty, 1-2 honest warm sentences for readers. Otherwise null.
-
-Each story object must have:
-  - "title": a hopeful but honest headline you write
-  - "summary": 2-3 sentences, warm and grounded in actual findings
+Return ONLY valid JSON — a list of up to 5 objects. Each object must have:
+  - "title": a punchy headline you write
+  - "summary": 2-3 sentences
   - "url": the original article URL (copy exactly)
   - "source": the news source name (copy exactly)
+  - "category": exactly "AI x Biotech" or "Biotech"
 
 Articles:
 {articles_to_prompt_text(articles)}
 
-Return only the JSON object. No markdown fences, no explanation."""
+Return only the JSON array. No markdown fences, no explanation."""
 
     message = client.messages.create(
         model=MODEL,
@@ -164,27 +260,78 @@ Return only the JSON object. No markdown fences, no explanation."""
         messages=[{"role": "user", "content": prompt}],
     )
     raw = _clean_json(message.content[0].text)
-    result = json.loads(raw)
-    if not isinstance(result, dict):
-        raise ValueError(f"Expected dict from Claude, got: {type(result)}")
-    result.setdefault("stories", [])
-    result.setdefault("editor_note", None)
-    return result
+    stories = json.loads(raw)
+    if not isinstance(stories, list):
+        raise ValueError(f"Expected list from Claude, got: {type(stories)}")
+    return stories[:5]
 
 
 # ---------------------------------------------------------------------------
 # HTML email builder
 # ---------------------------------------------------------------------------
 
-def _story_card(story: dict, index: int, accent: str) -> str:
+def _stock_row(item: dict) -> str:
+    pct = item["change_pct"]
+    is_up = pct >= 0
+    color = "#4ade80" if is_up else "#f87171"
+    arrow = "▲" if is_up else "▼"
+    sign = "+" if is_up else ""
+    return f"""
+        <tr>
+          <td style="padding:9px 4px; border-bottom:1px solid #1c1c1c;
+                     color:#f0f0f0; font-weight:600; font-size:13px;
+                     font-family:Menlo,Consolas,monospace;">{item["ticker"]}</td>
+          <td style="padding:9px 4px; border-bottom:1px solid #1c1c1c;
+                     color:#aaaaaa; text-align:right; font-size:13px;
+                     font-family:Menlo,Consolas,monospace;">${item["price"]:,.2f}</td>
+          <td style="padding:9px 4px; border-bottom:1px solid #1c1c1c;
+                     color:{color}; text-align:right; font-size:13px;
+                     font-weight:600; font-family:Menlo,Consolas,monospace;">
+            {arrow} {sign}{pct:.2f}%
+          </td>
+        </tr>"""
+
+
+def _stock_table(rows: list[dict], header_label: str) -> str:
+    if not rows:
+        return (f'<p style="color:#888888; font-size:14px; font-style:italic;">'
+                f'No {header_label.lower()} data available.</p>')
+
+    body = "".join(_stock_row(r) for r in rows)
+    return f"""
+        <table role="presentation" style="width:100%; border-collapse:collapse; margin-bottom:24px;">
+          <thead>
+            <tr>
+              <th style="text-align:left; padding:8px 4px; border-bottom:1px solid #333;
+                         color:#666666; font-size:10px; text-transform:uppercase;
+                         letter-spacing:0.1em; font-weight:700;">{header_label}</th>
+              <th style="text-align:right; padding:8px 4px; border-bottom:1px solid #333;
+                         color:#666666; font-size:10px; text-transform:uppercase;
+                         letter-spacing:0.1em; font-weight:700;">Last Close</th>
+              <th style="text-align:right; padding:8px 4px; border-bottom:1px solid #333;
+                         color:#666666; font-size:10px; text-transform:uppercase;
+                         letter-spacing:0.1em; font-weight:700;">24h</th>
+            </tr>
+          </thead>
+          <tbody>{body}</tbody>
+        </table>"""
+
+
+def _story_card(story: dict, index: int, accent: str, show_category: bool = False) -> str:
     title = story.get("title", "Untitled")
     summary = story.get("summary", "")
     url = story.get("url", "#")
     source = story.get("source", "")
+    category = story.get("category", "")
+
+    meta = f"{index} &nbsp;·&nbsp; {source}"
+    if show_category and category:
+        meta = f"{index} &nbsp;·&nbsp; {category} &nbsp;·&nbsp; {source}"
+
     return f"""
         <div style="margin-bottom:28px; padding-bottom:24px; border-bottom:1px solid #222222;">
           <p style="margin:0 0 6px 0; color:#666666; font-size:11px; text-transform:uppercase;
-                    letter-spacing:0.1em; font-weight:600;">{index} &nbsp;·&nbsp; {source}</p>
+                    letter-spacing:0.1em; font-weight:600;">{meta}</p>
           <h3 style="margin:0 0 10px 0; font-size:17px; font-weight:600; line-height:1.4; color:#f0f0f0;">
             <a href="{url}" style="color:#f0f0f0; text-decoration:none;">{title}</a>
           </h3>
@@ -194,26 +341,28 @@ def _story_card(story: dict, index: int, accent: str) -> str:
         </div>"""
 
 
-def build_html(ai_stories: list[dict], cancer_data: dict, date_str: str) -> str:
+def build_html(stock_data: dict, ai_stories: list[dict],
+               biotech_stories: list[dict], date_str: str) -> str:
+    watchlist_table = _stock_table(stock_data["watchlist"], "Watchlist")
+    movers_table = _stock_table(stock_data["movers"], "Top 10 Movers")
+    stocks_as_of = stock_data["as_of"]
+
     ai_cards = "".join(
         _story_card(s, i + 1, "#7eb8f7") for i, s in enumerate(ai_stories)
     )
 
-    cancer_stories = cancer_data.get("stories", [])
-    editor_note = cancer_data.get("editor_note")
-
-    if cancer_stories:
-        cancer_body = "".join(
-            _story_card(s, i + 1, "#4ade80") for i, s in enumerate(cancer_stories)
+    if biotech_stories:
+        biotech_body = "".join(
+            _story_card(s, i + 1, "#4ade80", show_category=True)
+            for i, s in enumerate(biotech_stories)
         )
     else:
-        note = editor_note or (
-            "No genuinely positive cancer research stories surfaced this cycle. "
-            "We'd rather say nothing than fill space with noise. Check back in two days."
-        )
-        cancer_body = (
-            f'<p style="color:#888888; font-size:14px; line-height:1.7; '
-            f'font-style:italic; margin:0;">{note}</p>'
+        biotech_body = (
+            '<p style="color:#888888; font-size:14px; line-height:1.7; '
+            'font-style:italic; margin:0;">'
+            "Quiet day in biotech. No genuinely meaningful advances surfaced — "
+            "we'd rather say nothing than fill space with noise."
+            '</p>'
         )
 
     return f"""<!DOCTYPE html>
@@ -221,7 +370,7 @@ def build_html(ai_stories: list[dict], cancer_data: dict, date_str: str) -> str:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>AI &amp; Cancer Research Digest &mdash; {date_str}</title>
+  <title>Daily Digest &mdash; {date_str}</title>
 </head>
 <body style="margin:0; padding:0; background-color:#0d0d0d;
              font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;">
@@ -239,11 +388,11 @@ def build_html(ai_stories: list[dict], cancer_data: dict, date_str: str) -> str:
                         border-radius:12px 12px 0 0; padding:44px 44px 36px 44px;">
               <p style="margin:0 0 10px 0; color:#7eb8f7; font-size:11px;
                          letter-spacing:0.15em; text-transform:uppercase; font-weight:700;">
-                Biweekly Digest
+                Daily Digest
               </p>
               <h1 style="margin:0 0 8px 0; color:#ffffff; font-size:30px;
                           font-weight:700; line-height:1.15; letter-spacing:-0.02em;">
-                AI &amp; Cancer Research
+                Stocks, AI &amp; Biotech
               </h1>
               <p style="margin:0; color:#5a6a82; font-size:14px;">{date_str}</p>
             </td>
@@ -254,24 +403,63 @@ def build_html(ai_stories: list[dict], cancer_data: dict, date_str: str) -> str:
             <td style="background-color:#111111; padding:18px 44px;
                         border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
               <p style="margin:0; color:#666666; font-size:13px; line-height:1.65;">
-                What happened in the last 48 hours that's worth your attention.
-                Two topics, curated by AI, zero noise.
+                What moved overnight and what to know this morning.
+                Three sections, curated by AI, zero noise.
               </p>
             </td>
           </tr>
 
-          <!-- ── SECTION 1: AI/ML ────────────────────────────────── -->
+          <!-- ── SECTION 1: STOCKS ──────────────────────────────── -->
+          <tr>
+            <td style="background-color:#111111; padding:36px 44px 4px 44px;
+                        border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
+              <div style="border-left:3px solid #f59e0b; padding-left:16px;">
+                <p style="margin:0 0 3px 0; color:#f59e0b; font-size:10px;
+                           letter-spacing:0.14em; text-transform:uppercase; font-weight:700;">
+                  Section 01
+                </p>
+                <h2 style="margin:0 0 4px 0; color:#f0f0f0; font-size:20px; font-weight:700;">
+                  Stocks
+                </h2>
+                <p style="margin:0; color:#555555; font-size:12px;">
+                  Last close: {stocks_as_of}
+                </p>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#111111; padding:28px 44px 8px 44px;
+                        border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
+              {watchlist_table}
+              {movers_table}
+            </td>
+          </tr>
+
+          <!-- ── GRADIENT DIVIDER ────────────────────────────────── -->
+          <tr>
+            <td style="background-color:#111111; padding:4px 44px 4px 44px;
+                        border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
+              <div style="height:1px;
+                           background:linear-gradient(90deg,transparent,#f59e0b 30%,#7eb8f7 70%,transparent);">
+              </div>
+            </td>
+          </tr>
+
+          <!-- ── SECTION 2: AI & TECH ────────────────────────────── -->
           <tr>
             <td style="background-color:#111111; padding:36px 44px 4px 44px;
                         border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
               <div style="border-left:3px solid #7eb8f7; padding-left:16px;">
                 <p style="margin:0 0 3px 0; color:#7eb8f7; font-size:10px;
                            letter-spacing:0.14em; text-transform:uppercase; font-weight:700;">
-                  Section 01
+                  Section 02
                 </p>
-                <h2 style="margin:0; color:#f0f0f0; font-size:20px; font-weight:700;">
-                  AI &amp; Machine Learning
+                <h2 style="margin:0 0 4px 0; color:#f0f0f0; font-size:20px; font-weight:700;">
+                  AI &amp; Tech
                 </h2>
+                <p style="margin:0; color:#555555; font-size:12px;">
+                  Models, chips, data centers, infra &amp; policy
+                </p>
               </div>
             </td>
           </tr>
@@ -292,20 +480,20 @@ def build_html(ai_stories: list[dict], cancer_data: dict, date_str: str) -> str:
             </td>
           </tr>
 
-          <!-- ── SECTION 2: CANCER RESEARCH ─────────────────────── -->
+          <!-- ── SECTION 3: BIOTECH ──────────────────────────────── -->
           <tr>
             <td style="background-color:#111111; padding:36px 44px 4px 44px;
                         border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
               <div style="border-left:3px solid #4ade80; padding-left:16px;">
                 <p style="margin:0 0 3px 0; color:#4ade80; font-size:10px;
                            letter-spacing:0.14em; text-transform:uppercase; font-weight:700;">
-                  Section 02
+                  Section 03
                 </p>
                 <h2 style="margin:0 0 4px 0; color:#f0f0f0; font-size:20px; font-weight:700;">
-                  Cancer Research
+                  Biotech
                 </h2>
                 <p style="margin:0; color:#555555; font-size:12px;">
-                  Positive &amp; promising news only &mdash; real progress, honest reporting.
+                  AI x biotech crossover &amp; general advancements
                 </p>
               </div>
             </td>
@@ -313,7 +501,7 @@ def build_html(ai_stories: list[dict], cancer_data: dict, date_str: str) -> str:
           <tr>
             <td style="background-color:#111111; padding:28px 44px 40px 44px;
                         border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
-              {cancer_body}
+              {biotech_body}
             </td>
           </tr>
 
@@ -326,8 +514,10 @@ def build_html(ai_stories: list[dict], cancer_data: dict, date_str: str) -> str:
                 Powered by
                 <a href="https://newsapi.org" style="color:#3d3d3d; text-decoration:none;">NewsAPI</a>
                 &nbsp;+&nbsp;
-                <a href="https://anthropic.com" style="color:#3d3d3d; text-decoration:none;">Claude claude-opus-4-6</a>
-                &nbsp;&middot;&nbsp; Runs every 2 days via GitHub Actions
+                <a href="https://finance.yahoo.com" style="color:#3d3d3d; text-decoration:none;">Yahoo Finance</a>
+                &nbsp;+&nbsp;
+                <a href="https://anthropic.com" style="color:#3d3d3d; text-decoration:none;">Claude</a>
+                &nbsp;&middot;&nbsp; Daily via GitHub Actions
               </p>
               <p style="margin:0; color:#252525; font-size:11px; text-align:center;">
                 You're receiving this because you built it. Nice work.
@@ -356,7 +546,7 @@ def send_email(subject: str, html_body: str) -> None:
     msg["To"] = EMAIL_RECIPIENT
 
     plain = (
-        "Your biweekly AI & Cancer Research digest is ready. "
+        "Your daily Stocks, AI & Biotech digest is ready. "
         "Open in an HTML-capable email client to read it properly."
     )
     msg.attach(MIMEText(plain, "plain"))
@@ -377,52 +567,53 @@ def send_email(subject: str, html_body: str) -> None:
 def main() -> None:
     log.info("=== Digest run starting ===")
 
-    # --- AI / ML news ---
-    log.info("Fetching AI/ML articles...")
-    ai_query = (
-        '"artificial intelligence" OR "machine learning" OR "large language model" '
-        'OR "GPT" OR "Claude AI" OR "Gemini" OR "AI model" OR "deep learning" '
-        'OR "OpenAI" OR "foundation model" OR "AI regulation"'
-    )
-    ai_articles = fetch_articles(ai_query, days_back=2, page_size=25)
-    if not ai_articles:
-        log.warning("No AI/ML articles in last 2 days — widening to 4 days.")
-        ai_articles = fetch_articles(ai_query, days_back=4, page_size=25)
-    log.info("AI/ML articles fetched: %d", len(ai_articles))
+    # --- Stocks ---
+    log.info("Fetching stock data...")
+    stock_data = get_stock_summary()
 
-    # --- Cancer research news ---
-    log.info("Fetching cancer research articles...")
-    cancer_query = (
-        'cancer AND ('
-        '"clinical trial" OR "FDA approval" OR "drug approved" OR '
-        '"breakthrough therapy" OR "remission" OR "survival" OR '
-        '"immunotherapy" OR "cancer treatment" OR "oncology" OR '
-        '"tumor" OR "cancer drug" OR "cancer cure"'
-        ')'
+    # --- AI / Tech news ---
+    log.info("Fetching AI/tech articles...")
+    ai_query = (
+        '("artificial intelligence" OR "machine learning" OR "large language model" '
+        'OR "GPT" OR "Claude AI" OR "Gemini" OR "AI model" OR "deep learning" '
+        'OR "OpenAI" OR "Anthropic" OR "foundation model" OR "AI chip" '
+        'OR "GPU" OR "semiconductor" OR "TSMC" OR "NVIDIA" '
+        'OR "data center" OR "AI infrastructure" OR "AI startup" OR "AI regulation")'
     )
-    cancer_articles = fetch_articles(cancer_query, days_back=2, page_size=25)
-    if not cancer_articles:
-        log.warning("No cancer articles in last 2 days — widening to 4 days.")
-        cancer_articles = fetch_articles(cancer_query, days_back=4, page_size=25)
-    log.info("Cancer articles fetched: %d", len(cancer_articles))
+    ai_articles = fetch_articles(ai_query, days_back=1, page_size=30)
+    if not ai_articles:
+        log.warning("No AI articles in last 24h — widening to 3 days.")
+        ai_articles = fetch_articles(ai_query, days_back=3, page_size=30)
+    log.info("AI articles fetched: %d", len(ai_articles))
+
+    # --- Biotech news (general + AI x biotech crossover) ---
+    log.info("Fetching biotech articles...")
+    biotech_query = (
+        '(biotech OR biotechnology OR "drug discovery" OR "clinical trial" '
+        'OR "FDA approval" OR "EMA approval" OR "gene therapy" OR "gene editing" '
+        'OR "CRISPR" OR mRNA OR immunotherapy OR "novel therapy" '
+        'OR "breakthrough therapy" OR "AlphaFold" OR "protein folding" '
+        'OR "AI drug discovery" OR "computational biology" OR "synthetic biology")'
+    )
+    biotech_articles = fetch_articles(biotech_query, days_back=1, page_size=30)
+    if not biotech_articles:
+        log.warning("No biotech articles in last 24h — widening to 3 days.")
+        biotech_articles = fetch_articles(biotech_query, days_back=3, page_size=30)
+    log.info("Biotech articles fetched: %d", len(biotech_articles))
 
     # --- Summarize ---
-    log.info("Summarizing AI/ML stories with Claude...")
+    log.info("Summarizing AI/tech stories with Claude...")
     ai_stories = summarize_ai_news(ai_articles)
-    log.info("AI/ML stories selected: %d", len(ai_stories))
+    log.info("AI/tech stories selected: %d", len(ai_stories))
 
-    log.info("Summarizing cancer research stories with Claude...")
-    cancer_data = summarize_cancer_news(cancer_articles)
-    log.info(
-        "Cancer stories selected: %d | editor_note: %s",
-        len(cancer_data.get("stories", [])),
-        "yes" if cancer_data.get("editor_note") else "no",
-    )
+    log.info("Summarizing biotech stories with Claude...")
+    biotech_stories = summarize_biotech_news(biotech_articles)
+    log.info("Biotech stories selected: %d", len(biotech_stories))
 
     # --- Build & send ---
     date_str = datetime.utcnow().strftime("%B %d, %Y")
-    subject = f"Your Digest: AI & Cancer Research — {date_str}"
-    html_body = build_html(ai_stories, cancer_data, date_str)
+    subject = f"Daily Digest: Stocks, AI & Biotech — {date_str}"
+    html_body = build_html(stock_data, ai_stories, biotech_stories, date_str)
 
     log.info("Sending email...")
     send_email(subject, html_body)

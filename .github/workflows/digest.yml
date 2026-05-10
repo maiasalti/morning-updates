@@ -1,9 +1,9 @@
-name: AI & Cancer Research Digest
+name: Daily Stocks, AI & Biotech Digest
 
 on:
   schedule:
-    # Runs every 2 days at 9:00 AM UTC (5 AM ET / 2 AM PT)
-    - cron: "0 9 */2 * *"
+    # Daily at 02:00 UTC = 10:00 AM Singapore Time (UTC+8)
+    - cron: "0 2 * * *"
 
   # Allow manual trigger from the Actions tab
   workflow_dispatch:

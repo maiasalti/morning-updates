@@ -9,6 +9,7 @@ import logging
 import os
 import smtplib
 import ssl
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -130,13 +131,22 @@ EXTENDED_UNIVERSE = WATCHLIST + EXTRA_UNIVERSE
 # Stock fetching (yfinance — free, no API key)
 # ---------------------------------------------------------------------------
 
+def _fetch_market_cap(ticker: str) -> float | None:
+    """Fetch market cap via yfinance fast_info. Returns None on failure."""
+    try:
+        mc = yf.Ticker(ticker).fast_info["market_cap"]
+        return float(mc) if mc else None
+    except Exception:
+        return None
+
+
 def fetch_stock_data(tickers: list[str]) -> tuple[list[dict], str | None]:
     """
     Batch-fetch the last several daily candles for each ticker, then compute
     the % change between the two most recent closes.
 
     Returns (results, as_of_date_str). Each result has:
-        ticker, price, change_pct, change_abs
+        ticker, price, change_pct, change_abs, market_cap
 
     Tickers that fail (delisted, halted, no data) are silently dropped.
     """
@@ -185,6 +195,15 @@ def fetch_stock_data(tickers: list[str]) -> tuple[list[dict], str | None]:
 
     log.info("Successfully fetched %d/%d tickers (as of %s)",
              len(results), len(tickers), as_of)
+
+    # Market caps — parallel since fast_info is a per-ticker call
+    log.info("Fetching market caps for %d tickers...", len(results))
+    syms = [r["ticker"] for r in results]
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        caps = list(ex.map(_fetch_market_cap, syms))
+    for r, mc in zip(results, caps):
+        r["market_cap"] = mc
+
     return results, as_of
 
 
@@ -337,6 +356,19 @@ Return only the JSON array. No markdown fences, no explanation."""
 # HTML email builder
 # ---------------------------------------------------------------------------
 
+def _format_market_cap(mc: float | None) -> str:
+    """Format a market cap value as a short string ($2.94T, $356B, $42.1M)."""
+    if not mc or mc <= 0:
+        return "—"
+    if mc >= 1e12:
+        return f"${mc / 1e12:.2f}T"
+    if mc >= 1e9:
+        return f"${mc / 1e9:.1f}B"
+    if mc >= 1e6:
+        return f"${mc / 1e6:.0f}M"
+    return f"${mc:,.0f}"
+
+
 def _stock_row(item: dict) -> str:
     pct = item["change_pct"]
     is_up = pct >= 0
@@ -345,6 +377,7 @@ def _stock_row(item: dict) -> str:
     sign = "+" if is_up else ""
     ticker = item["ticker"]
     name, desc = TICKER_INFO.get(ticker, (ticker, ""))
+    mc_str = _format_market_cap(item.get("market_cap"))
 
     descriptor_html = (
         f'<div style="color:#666666; font-size:11px; margin-top:2px; '
@@ -360,6 +393,10 @@ def _stock_row(item: dict) -> str:
                         font-family:Menlo,Consolas,monospace;">{ticker}</div>
             {descriptor_html}
           </td>
+          <td style="padding:10px 4px; border-bottom:1px solid #1c1c1c;
+                     color:#888888; text-align:right; font-size:12px;
+                     font-family:Menlo,Consolas,monospace;
+                     vertical-align:top; white-space:nowrap;">{mc_str}</td>
           <td style="padding:10px 4px; border-bottom:1px solid #1c1c1c;
                      color:#aaaaaa; text-align:right; font-size:13px;
                      font-family:Menlo,Consolas,monospace;
@@ -386,6 +423,9 @@ def _stock_table(rows: list[dict], header_label: str) -> str:
               <th style="text-align:left; padding:8px 4px; border-bottom:1px solid #333;
                          color:#666666; font-size:10px; text-transform:uppercase;
                          letter-spacing:0.1em; font-weight:700;">{header_label}</th>
+              <th style="text-align:right; padding:8px 4px; border-bottom:1px solid #333;
+                         color:#666666; font-size:10px; text-transform:uppercase;
+                         letter-spacing:0.1em; font-weight:700;">Mkt Cap</th>
               <th style="text-align:right; padding:8px 4px; border-bottom:1px solid #333;
                          color:#666666; font-size:10px; text-transform:uppercase;
                          letter-spacing:0.1em; font-weight:700;">Last Close</th>

@@ -310,6 +310,50 @@ Return only the JSON array. No markdown fences, no explanation, no preamble."""
     return stories[:5]
 
 
+def summarize_new_models(articles: list[dict]) -> list[dict]:
+    """
+    Pick and summarize up to 5 stories about AI models released in the last
+    24 hours — open-weight, proprietary, and industry-specific (medical, math,
+    code, geospatial, etc.). Returns a list of dicts with keys: title,
+    summary, url, source, category.
+    """
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    prompt = f"""You are the editor of a digest tracking new AI model releases for a sharp, technical reader. Below are raw news articles from the last 24 hours.
+
+Your task: Pick up to 5 stories about models that were actually RELEASED or LAUNCHED in the last 24 hours — not funding news, not roadmap teasers, not "coming soon" announcements. Cover a mix of:
+- Open-weight models (released on Hugging Face, GitHub, etc.)
+- Proprietary/closed models (API-only releases from major labs)
+- Industry-specific models (medical, math/reasoning, geospatial, legal, code, robotics, etc.)
+
+For each, write a short, punchy 2-4 sentence summary covering: what it is, what it claims to do well, and — critically — how it compares to already-released models (e.g. "beats Llama 4 on X benchmark," "smaller than GPT-6 but faster," "first open-weight model to do Y"). If the article doesn't give a real comparison, say what's actually new instead of inventing one.
+
+Skip noise: funding rounds, hiring announcements, vague roadmap talk, rumors with no concrete release.
+
+Return ONLY valid JSON — a list of up to 5 objects. Each object must have:
+  - "title": a short, punchy headline you write (NOT the original title) — include the model name
+  - "summary": 2-4 sentences, smart and conversational, must include a comparison to existing models where possible
+  - "url": the original article URL (copy exactly)
+  - "source": the news source name (copy exactly)
+  - "category": exactly one of "Open-Weight", "Proprietary", or "Industry-Specific"
+
+Articles:
+{articles_to_prompt_text(articles)}
+
+Return only the JSON array. No markdown fences, no explanation, no preamble."""
+
+    message = client.messages.create(
+        model=MODEL,
+        max_tokens=1800,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    raw = _clean_json(message.content[0].text)
+    stories = json.loads(raw)
+    if not isinstance(stories, list):
+        raise ValueError(f"Expected list from Claude, got: {type(stories)}")
+    return stories[:5]
+
+
 def summarize_biotech_news(articles: list[dict]) -> list[dict]:
     """
     Hybrid section: prioritize AI x biotech crossover, fill with general
@@ -462,7 +506,7 @@ def _story_card(story: dict, index: int, accent: str, show_category: bool = Fals
         </div>"""
 
 
-def build_html(stock_data: dict, ai_stories: list[dict],
+def build_html(stock_data: dict, ai_stories: list[dict], model_stories: list[dict],
                biotech_stories: list[dict], date_str: str) -> str:
     watchlist_table = _stock_table(stock_data["watchlist"], "Watchlist")
     movers_table = _stock_table(stock_data["movers"], "Top 10 Movers")
@@ -471,6 +515,19 @@ def build_html(stock_data: dict, ai_stories: list[dict],
     ai_cards = "".join(
         _story_card(s, i + 1, "#7eb8f7") for i, s in enumerate(ai_stories)
     )
+
+    if model_stories:
+        model_body = "".join(
+            _story_card(s, i + 1, "#c084fc", show_category=True)
+            for i, s in enumerate(model_stories)
+        )
+    else:
+        model_body = (
+            '<p style="color:#888888; font-size:14px; line-height:1.7; '
+            'font-style:italic; margin:0;">'
+            "No notable model releases in the last 24 hours."
+            '</p>'
+        )
 
     if biotech_stories:
         biotech_body = "".join(
@@ -525,7 +582,7 @@ def build_html(stock_data: dict, ai_stories: list[dict],
                         border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
               <p style="margin:0; color:#666666; font-size:13px; line-height:1.65;">
                 What moved overnight and what to know this morning.
-                Three sections, curated by AI, zero noise.
+                Four sections, curated by AI, zero noise.
               </p>
             </td>
           </tr>
@@ -596,19 +653,54 @@ def build_html(stock_data: dict, ai_stories: list[dict],
             <td style="background-color:#111111; padding:4px 44px 4px 44px;
                         border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
               <div style="height:1px;
-                           background:linear-gradient(90deg,transparent,#7eb8f7 30%,#4ade80 70%,transparent);">
+                           background:linear-gradient(90deg,transparent,#7eb8f7 30%,#c084fc 70%,transparent);">
               </div>
             </td>
           </tr>
 
-          <!-- ── SECTION 3: BIOTECH ──────────────────────────────── -->
+          <!-- ── SECTION 3: NEW MODELS ───────────────────────────── -->
+          <tr>
+            <td style="background-color:#111111; padding:36px 44px 4px 44px;
+                        border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
+              <div style="border-left:3px solid #c084fc; padding-left:16px;">
+                <p style="margin:0 0 3px 0; color:#c084fc; font-size:10px;
+                           letter-spacing:0.14em; text-transform:uppercase; font-weight:700;">
+                  Section 03
+                </p>
+                <h2 style="margin:0 0 4px 0; color:#f0f0f0; font-size:20px; font-weight:700;">
+                  New Models
+                </h2>
+                <p style="margin:0; color:#555555; font-size:12px;">
+                  Released in the last 24h — open-weight, proprietary &amp; industry-specific
+                </p>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#111111; padding:28px 44px 20px 44px;
+                        border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
+              {model_body}
+            </td>
+          </tr>
+
+          <!-- ── GRADIENT DIVIDER ────────────────────────────────── -->
+          <tr>
+            <td style="background-color:#111111; padding:4px 44px 4px 44px;
+                        border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
+              <div style="height:1px;
+                           background:linear-gradient(90deg,transparent,#c084fc 30%,#4ade80 70%,transparent);">
+              </div>
+            </td>
+          </tr>
+
+          <!-- ── SECTION 4: BIOTECH ──────────────────────────────── -->
           <tr>
             <td style="background-color:#111111; padding:36px 44px 4px 44px;
                         border-left:1px solid #1c1c1c; border-right:1px solid #1c1c1c;">
               <div style="border-left:3px solid #4ade80; padding-left:16px;">
                 <p style="margin:0 0 3px 0; color:#4ade80; font-size:10px;
                            letter-spacing:0.14em; text-transform:uppercase; font-weight:700;">
-                  Section 03
+                  Section 04
                 </p>
                 <h2 style="margin:0 0 4px 0; color:#f0f0f0; font-size:20px; font-weight:700;">
                   Biotech
@@ -707,6 +799,22 @@ def main() -> None:
         ai_articles = fetch_articles(ai_query, days_back=3, page_size=30)
     log.info("AI articles fetched: %d", len(ai_articles))
 
+    # --- New model releases (open-weight, proprietary, industry-specific) ---
+    log.info("Fetching new-model articles...")
+    models_query = (
+        '("open weight" OR "open source model" OR "model release" OR "new model" '
+        'OR "releases a new" OR "unveils" OR "launches" OR "model weights" '
+        'OR "Hugging Face" OR "foundation model" OR "frontier model" '
+        'OR "reasoning model" OR "medical AI model" OR "math model" '
+        'OR "geospatial AI" OR "code model" OR benchmark)'
+        ' AND (AI OR "large language model" OR LLM OR model)'
+    )
+    model_articles = fetch_articles(models_query, days_back=1, page_size=30)
+    if not model_articles:
+        log.warning("No model-release articles in last 24h — widening to 3 days.")
+        model_articles = fetch_articles(models_query, days_back=3, page_size=30)
+    log.info("Model-release articles fetched: %d", len(model_articles))
+
     # --- Biotech news (general + AI x biotech crossover) ---
     log.info("Fetching biotech articles...")
     biotech_query = (
@@ -727,6 +835,10 @@ def main() -> None:
     ai_stories = summarize_ai_news(ai_articles)
     log.info("AI/tech stories selected: %d", len(ai_stories))
 
+    log.info("Summarizing new-model stories with Claude...")
+    model_stories = summarize_new_models(model_articles)
+    log.info("New-model stories selected: %d", len(model_stories))
+
     log.info("Summarizing biotech stories with Claude...")
     biotech_stories = summarize_biotech_news(biotech_articles)
     log.info("Biotech stories selected: %d", len(biotech_stories))
@@ -734,7 +846,7 @@ def main() -> None:
     # --- Build & send ---
     date_str = datetime.utcnow().strftime("%B %d, %Y")
     subject = f"Daily Digest: Stocks, AI & Biotech — {date_str}"
-    html_body = build_html(stock_data, ai_stories, biotech_stories, date_str)
+    html_body = build_html(stock_data, ai_stories, model_stories, biotech_stories, date_str)
 
     log.info("Sending email...")
     send_email(subject, html_body)

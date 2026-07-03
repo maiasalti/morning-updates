@@ -2,8 +2,12 @@ name: Daily Stocks, AI & Biotech Digest
 
 on:
   schedule:
-    # Daily at 02:00 UTC = 10:00 AM Singapore Time (UTC+8)
-    - cron: "0 2 * * *"
+    # Target: 8:00 AM Singapore Time (UTC+8) = 00:00 UTC.
+    # GitHub has been delaying this workflow by ~4 hours (observed: scheduled
+    # 02:00 UTC, actual runs 05:47-06:39 UTC) — top-of-hour crons queue behind
+    # everyone else's. Scheduled 4h10m early at an off-round minute (19:50 UTC
+    # the previous day) to land close to 00:00 UTC / 8am SGT despite the delay.
+    - cron: "50 19 * * *"
 
   # Allow manual trigger from the Actions tab
   workflow_dispatch:

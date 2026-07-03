@@ -1,14 +1,14 @@
 # Daily Stocks, AI & Biotech Digest
 
-A self-running email digest that fetches AI/tech stock movements, AI & tech news, and biotech advancements, summarizes everything with Claude, and delivers a clean HTML email to your inbox **every morning at 10am Singapore time** via GitHub Actions.
+A self-running email digest that fetches AI/tech stock movements, AI & tech news, new model releases, and biotech advancements, summarizes everything with Claude, and delivers a clean HTML email to your inbox **every morning at 8am Singapore time** via GitHub Actions.
 
 ---
 
 ## What it does
 
-- **Runs automatically** every day at 10:00 AM SGT (02:00 UTC) — also triggerable manually
+- **Runs automatically** every day, targeting 8:00 AM SGT — also triggerable manually
 - **Pulls stock data** for ~60 AI/tech tickers from Yahoo Finance (free, no API key)
-- **Fetches** the latest AI/tech and biotech news from NewsAPI
+- **Fetches** the latest AI/tech, new-model-release, and biotech news from NewsAPI
 - **Summarizes** with Claude — smart, warm, human tone, no hype
 - **Sends** a dark-themed HTML email via Gmail SMTP
 
@@ -16,7 +16,8 @@ A self-running email digest that fetches AI/tech stock movements, AI & tech news
 
 1. **Stocks** — 20-stock watchlist with last-close prices and 24h % change, plus the top 10 biggest movers from a broader ~60-ticker AI/tech universe (by absolute % move, so big drops surface too)
 2. **AI & Tech** — Top 5 stories: model releases, chip development, data centers, AI infrastructure, policy
-3. **Biotech** — Up to 5 stories. Prioritizes AI × biotech crossover (AI-discovered drugs, AlphaFold-style breakthroughs, computational biology), fills with general biotech advancements (clinical trial wins, FDA approvals, gene editing)
+3. **New Models** — Up to 5 stories on models actually released in the last 24 hours — open-weight, proprietary, and industry-specific (medical, math, geospatial, code, etc.) — each with a comparison to already-released models where the source supports it
+4. **Biotech** — Up to 5 stories. Prioritizes AI × biotech crossover (AI-discovered drugs, AlphaFold-style breakthroughs, computational biology), fills with general biotech advancements (clinical trial wins, FDA approvals, gene editing)
 
 ### Stock universe
 
@@ -24,7 +25,7 @@ A self-running email digest that fetches AI/tech stock movements, AI & tech news
 NVDA, MSFT, GOOGL, META, AMZN, TSM, AVGO, AMD, ASML, ARM, MU, SMCI, VRT, ANET, DELL, ORCL, PLTR, CRM, NOW, SNOW
 
 **Plus ~40 more for the movers scan:**
-AAPL, TSLA, IBM, INTC, QCOM, TXN, NXPI, MRVL, ON, LRCX, KLAC, AMAT, ADI, MCHP, SWKS, GFS, CSCO, JNPR, NTAP, PSTG, HPE, MDB, DDOG, NET, ESTC, AI, PATH, BBAI, SOUN, IONQ, QBTS, RGTI, NBIS, COHR, ANSS, SYM, DUOL, U, TEM, RXRX
+AAPL, TSLA, IBM, INTC, QCOM, TXN, NXPI, MRVL, ON, LRCX, KLAC, AMAT, ADI, MCHP, SWKS, GFS, CSCO, NTAP, PSTG, HPE, MDB, DDOG, NET, ESTC, AI, PATH, BBAI, SOUN, IONQ, QBTS, RGTI, NBIS, COHR, SNPS, SYM, DUOL, U, TEM, RXRX
 
 ---
 
@@ -103,7 +104,7 @@ ai-cancer-digest/
 
 | Thing to change | Where |
 |---|---|
-| Delivery time | `digest.yml` → cron schedule (currently `0 2 * * *` = 02:00 UTC = 10am SGT) |
+| Delivery time | `digest.yml` → cron schedule (currently `50 19 * * *` = 19:50 UTC, scheduled early to land near 8am SGT — see note below) |
 | Watchlist or universe | `digest.py` → `WATCHLIST` and `EXTRA_UNIVERSE` constants |
 | News topics / search terms | `main()` → `ai_query` and `biotech_query` strings |
 | Number of stories per section | Each `summarize_*()` function |
@@ -114,14 +115,16 @@ ai-cancer-digest/
 
 Edit the cron line in `.github/workflows/digest.yml`. GitHub Actions cron is always in **UTC**, so:
 
-| Local 10am | Cron expression |
+| Local 8am | Cron expression (target time, no buffer) |
 |---|---|
-| Singapore (UTC+8) | `0 2 * * *` |
-| London (UTC+0) | `0 10 * * *` |
-| New York (UTC-5) | `0 15 * * *` |
-| Pacific (UTC-8) | `0 18 * * *` |
+| Singapore (UTC+8) | `0 0 * * *` |
+| London (UTC+0) | `0 8 * * *` |
+| New York (UTC-5) | `0 13 * * *` |
+| Pacific (UTC-8) | `0 16 * * *` |
 
 For DST-aware locations, pick whichever offset matters more to you.
+
+**Why the actual cron isn't `0 0 * * *`:** GitHub Actions scheduled workflows queue behind everyone else's, and top-of-hour crons (`:00`) see the worst congestion. This repo saw a consistent ~4-hour delay at `0 2 * * *` (scheduled 02:00 UTC, actual runs landing 05:47–06:39 UTC). The current schedule (`50 19 * * *`) compensates by firing ~4h10m before the target and on an off-round minute. If you change the target time, re-derive the offset from your own observed delay (`gh run list --workflow=digest.yml` shows scheduled vs. actual times) rather than assuming zero delay.
 
 ---
 
@@ -145,7 +148,7 @@ For DST-aware locations, pick whichever offset matters more to you.
 - The `_clean_json()` helper strips markdown fences if Claude wraps its response
 
 **Workflow not running on schedule?**
-- GitHub may delay scheduled workflows by up to 1 hour during high-traffic periods
+- GitHub documents "up to 1 hour" of delay for scheduled workflows, but in practice top-of-hour crons (`:00`) can see much longer delays (this repo saw ~4 hours). Off-round minutes queue faster — see the timezone section above.
 - Repos with no activity for 60 days have scheduled workflows paused — push a commit to reactivate
 
 **Weekend runs show "stale" stock data?**

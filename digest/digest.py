@@ -267,13 +267,29 @@ def articles_to_prompt_text(articles: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 def _clean_json(text: str) -> str:
-    """Strip markdown code fences if Claude wrapped the JSON in them."""
+    """
+    Return just the JSON value from Claude's reply.
+
+    Handles markdown code fences, a prose preamble, and trailing commentary
+    (e.g. "[]\nNone of the articles qualify..."), any of which would otherwise
+    make json.loads raise. Returns the text unchanged if no JSON value is found,
+    so the caller's json.loads still surfaces a clear error.
+    """
     text = text.strip()
     if text.startswith("```"):
         lines = text.splitlines()
         inner = lines[1:-1] if lines[-1].strip() == "```" else lines[1:]
         text = "\n".join(inner).strip()
-    return text
+
+    starts = [i for i in (text.find("["), text.find("{")) if i != -1]
+    if not starts:
+        return text
+    start = min(starts)
+    try:
+        _, end = json.JSONDecoder().raw_decode(text, start)
+    except json.JSONDecodeError:
+        return text
+    return text[start:end]
 
 
 def summarize_ai_news(articles: list[dict]) -> list[dict]:

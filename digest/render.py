@@ -169,7 +169,7 @@ def build_html(data: dict) -> str:
 
     x_body = (
         "".join(_x_card(p, i + 1, X_COLOR) for i, p in enumerate(data["x_posts"]))
-        or _empty("Nothing worth your time on X in the last 24 hours.")
+        or _empty("Nothing worth your time on X since the last digest.")
     )
     ai_body = "".join(
         _story_card(s, i + 1, AI_COLOR) for i, s in enumerate(data["ai_stories"])
@@ -177,7 +177,7 @@ def build_html(data: dict) -> str:
     model_body = (
         "".join(_story_card(s, i + 1, MODELS_COLOR, show_category=True)
                 for i, s in enumerate(data["model_stories"]))
-        or _empty("No notable model releases in the last 24 hours.")
+        or _empty("No notable model releases since the last digest.")
     )
     biotech_body = (
         "".join(_story_card(s, i + 1, BIOTECH_COLOR, show_category=True)
@@ -235,7 +235,7 @@ def build_html(data: dict) -> str:
 {_section_header(2, AI_COLOR, "AI &amp; Tech", "Models, chips, data centers, infra &amp; policy")}
 {_section_body(ai_body)}
 {_divider(AI_COLOR, MODELS_COLOR)}
-{_section_header(3, MODELS_COLOR, "New Models", "Released in the last 24h — open-weight, proprietary &amp; industry-specific")}
+{_section_header(3, MODELS_COLOR, "New Models", "Fresh releases — open-weight, proprietary &amp; industry-specific")}
 {_section_body(model_body)}
 {_divider(MODELS_COLOR, BIOTECH_COLOR)}
 {_section_header(4, BIOTECH_COLOR, "Biotech", "AI x biotech crossover &amp; general advancements")}
